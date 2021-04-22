@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - v**
+      - v*.*
+      - v1.*
+      - v2.*
+      - v*
+      - v0.*
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
   
