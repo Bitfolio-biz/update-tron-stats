@@ -10,13 +10,14 @@ import StatusCodes from 'http-status-codes';
 import 'express-async-errors';
 import { Router } from 'express';
 import logger from '@shared/Logger';
+import { performance } from 'perf_hooks';
 
 const org = 'bitfolio'
-const url = "http://mon-influxdb.monitoring:8086"
-const host = 'mon-influxdb.monitoring'
+//const url = "http://mon-influxdb.monitoring:8086"
+//const host = 'mon-influxdb.monitoring'
 const port = 8086
-// const url = "http://localhost:8086"
-// const host = 'localhost'
+const url = "http://localhost:8086"
+const host = 'localhost'
 const index: Router = Router();
 index.get('/', (req, res, next) => {
    res.send('{"status":"UP","checks":"none"}'); 
@@ -25,6 +26,17 @@ index.get('/', (req, res, next) => {
 const tronUrl = 'https://apilist.tronscan.org/api/stats/overview'
 
 console.log('Starting tronscan stats overview. Collecting previous day stats every 8 hours.')
+
+// metrics
+export var pMetrics = {codes: 400, payload: 0, timer: 0, influxAlive: 1};
+var setCodes = function (newVal: any) { pMetrics.codes = newVal; }
+var setPayload = function (newVal: any) { pMetrics.payload = newVal; }
+var setTimer = function (newVal: any) { pMetrics.timer = newVal; }
+var setInfluxAlive = function (newVal: any) { pMetrics.influxAlive = newVal; }
+var getCodes = function() { return pMetrics.codes; }
+var getPayload = function() { return pMetrics.payload; }
+var getTimer = function() { return pMetrics.timer; }
+var getInfluxAlive = function() { return pMetrics.influxAlive; }
 
 function writeToInflux(writeApi: any, d0: any) {
   var d = new Date(d0.date)
@@ -67,20 +79,29 @@ function writeToInflux(writeApi: any, d0: any) {
 }
 
 setInterval(() => {
+  // Start timer
+  var t0 = performance.now();
   axios.get(tronUrl)
     .then((response: AxiosResponse) => {
-      const writeApi = new InfluxDB({ url }).getWriteApi(org, 'networks', 's')
-      writeApi.useDefaultTags({location: hostname()})
-      // Write only the last data point
       var indexLength = response.data.data.length
-      var lastIndex = indexLength - 1
       console.log('tronscan stats overview returned an indexLength of: ' + indexLength )
-      writeToInflux(writeApi, response.data.data[lastIndex])
-      //for (let i = 0; i < response.data.data.length; i++) {
-      //  writeToInflux(writeApi, response.data.data[i])
-      //}
-      writeApi.close()
+      if (indexLength) {
+        setCodes(200)
+        setPayload(Buffer.byteLength(JSON.stringify(response.data.data)))
+        const writeApi = new InfluxDB({ url }).getWriteApi(org, 'networks', 's')
+        writeApi.useDefaultTags({location: hostname()})
+        // Write only the last data point
+        var lastIndex = indexLength - 1
+        writeToInflux(writeApi, response.data.data[lastIndex])
+        //for (let i = 0; i < response.data.data.length; i++) {
+        //  writeToInflux(writeApi, response.data.data[i])
+        //}
+        writeApi.close()
+      }
     })
+    // End timer
+    var t1 = performance.now();
+    setTimer(t1 - t0)
 }, 28800000) //28800000 miliseconds is 8 hours (or 480 minutes or 28800 seconds)
 // every 10 seconds: 10000
 
@@ -106,10 +127,31 @@ const livePromise = () => new Promise((resolve, _reject) => {
 // Arguments: host: string, path = '', port = '80', method = 'HEAD' 
 let readyCheck = new health.PingCheck(host, '', port);
 healthCheck.registerReadinessCheck(readyCheck);
+if (readyCheck) {
+  setInfluxAlive(1)
+} else {
+  setInfluxAlive(0)
+}
 
 // let liveCheck = new health.LivenessCheck("LivenessCheck", livePromise);
 // Using readyCheck, not liveCheck
 healthCheck.registerLivenessCheck(readyCheck);
+
+// metrics for prometheus: codes, payload, timer, influxAlive
+// format response for metrics, example:
+// http_requests_total{method="post",code="200"} 1027 1395066363000
+function createMetrics() {
+  const timestamp = Date.now();
+  return "update_tron-stats_code " + getCodes() + " " + timestamp + "\n"
+  + "update_tron-stats_payload " + getPayload() + " " + timestamp + "\n"
+  + "update_tron-stats_timer " + getTimer() + " " + timestamp + "\n"
+  + "update_tron-stats_influx_alive " + getInfluxAlive() + " " + timestamp + "\n";
+}
+
+var metricsRouter = express.Router();
+metricsRouter.get('/', (req, res, next) => {
+  res.send(createMetrics());
+});
 
 /************************************************************************************
  *                              Set basic express settings
@@ -129,11 +171,13 @@ if (process.env.NODE_ENV === 'production') {
     app.use(helmet());
 }
 
+// health checks
 app.use('/live', health.LivenessEndpoint(healthCheck));
 app.use('/ready', health.ReadinessEndpoint(healthCheck));
 app.use('/healthy', health.HealthEndpoint(healthCheck));
-
-// Add APIs
+// metrics
+app.use('/metrics', metricsRouter);
+// Add index
 app.use('/', index);
 
 // Print API errors
