@@ -13,11 +13,11 @@ import logger from '@shared/Logger';
 import { performance } from 'perf_hooks';
 
 const org = 'bitfolio'
-//const url = "http://mon-influxdb.monitoring:8086"
-//const host = 'mon-influxdb.monitoring'
+const url = "http://mon-influxdb.monitoring:8086"
+const host = 'mon-influxdb.monitoring'
 const port = 8086
-const url = "http://localhost:8086"
-const host = 'localhost'
+//const url = "http://localhost:8086"
+//const host = 'localhost'
 const index: Router = Router();
 index.get('/', (req, res, next) => {
    res.send('{"status":"UP","checks":"none"}'); 
